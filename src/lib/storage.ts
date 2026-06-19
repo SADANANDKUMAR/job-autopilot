@@ -50,7 +50,23 @@ export const storage = {
 
   // ---- Resume ----
   getResume: () => get<Resume | null>(KEYS.resume, null),
-  setResume: (text: string) => set(KEYS.resume, { text, updatedAt: Date.now() } satisfies Resume),
+  setResume: async (text: string, pdf?: { base64: string; filename: string; bytes: number }): Promise<void> => {
+    // Preserve any existing PDF blob unless a new one was supplied
+    const prev = await get<Resume | null>(KEYS.resume, null);
+    const next: Resume = {
+      text,
+      updatedAt: Date.now(),
+      pdfBase64: pdf ? pdf.base64 : prev?.pdfBase64,
+      pdfFilename: pdf ? pdf.filename : prev?.pdfFilename,
+      pdfBytes: pdf ? pdf.bytes : prev?.pdfBytes,
+    };
+    await set(KEYS.resume, next);
+  },
+  clearResumePdf: async (): Promise<void> => {
+    const prev = await get<Resume | null>(KEYS.resume, null);
+    if (!prev) return;
+    await set(KEYS.resume, { text: prev.text, updatedAt: prev.updatedAt } satisfies Resume);
+  },
 
   // ---- Preferences ----
   getPrefs: () => get<Preferences>(KEYS.prefs, DEFAULT_PREFS),

@@ -83,16 +83,21 @@ export default function App() {
           <ProfileTab
             profile={profile}
             resume={resume}
-            onSave={async (p, r) => {
+            onSave={async (p, r, pdf) => {
               await storage.setProfile(p);
-              if (r !== null) await storage.setResume(r);
+              if (r !== null) await storage.setResume(r, pdf || undefined);
               setProfile(p);
-              if (r !== null) {
-                const fresh = await storage.getResume();
-                setResume(fresh);
-              }
+              const fresh = await storage.getResume();
+              setResume(fresh);
               showToast("Profile saved", "ok");
             }}
+            onClearPdf={async () => {
+              await storage.clearResumePdf();
+              const fresh = await storage.getResume();
+              setResume(fresh);
+              showToast("Stored PDF removed", "ok");
+            }}
+            onShowToast={showToast}
           />
         )}
         {tab === "prefs" && (

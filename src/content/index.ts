@@ -17,11 +17,16 @@ import {
   scanFormFields,
   setInputValue,
   setSelectValue,
+  attachFileToInput,
   findModalAdvanceButton,
   type ScrapedJob,
   type FormField,
 } from "@/lib/linkedin";
-import type { Msg, MsgResponse, TailorResult, AppliedJob } from "@/shared/types";
+import type { Msg, MsgResponse, TailorResult, AppliedJob, StoredPdf } from "@/shared/types";
+
+// Cache the resume PDF for the duration of an Easy Apply walk so we don't
+// re-fetch + re-decode from chrome.storage on every step.
+let cachedPdfFile: File | null = null;
 
 console.log("[Job Autopilot] content script loaded");
 
@@ -341,14 +346,19 @@ async function handleFillClick(job: ScrapedJob, result: TailorResult) {
   }
   const { profile } = profileRes.data;
 
+  // Pre-fetch the resume PDF (if stored) so we can auto-attach to file inputs
+  cachedPdfFile = await loadPdfAsFile();
+
   let safetyCounter = 0;
+  let filesAttachedThisRun = 0;
   while (safetyCounter < 8) {
     safetyCounter++;
     const currentModal = findEasyApplyModal();
     if (!currentModal) break;
 
     const fields = scanFormFields(currentModal);
-    fillFields(fields, profile, result);
+    const stepAttached = await fillFields(fields, profile, result);
+    filesAttachedThisRun += stepAttached;
 
     // Brief pause so LinkedIn's React processes our input events
     await sleep(350);
@@ -360,7 +370,10 @@ async function handleFillClick(job: ScrapedJob, result: TailorResult) {
     }
     if (advance.isSubmit) {
       // STOP. We do NOT click Submit. User reviews + clicks themselves.
-      toast("Form filled. Review and click Submit when ready.", "ok");
+      const msg = filesAttachedThisRun > 0
+        ? `Form filled (resume attached). Review and click Submit when ready.`
+        : `Form filled. Review and click Submit when ready.`;
+      toast(msg, "ok");
       void saveApplied({
         id: job.jobId,
         url: job.url,
@@ -373,16 +386,58 @@ async function handleFillClick(job: ScrapedJob, result: TailorResult) {
       });
       // Close our overlay so the user can see LinkedIn's modal
       document.getElementById(OVERLAY_ID)?.remove();
+      cachedPdfFile = null;
       break;
     }
     advance.btn.click();
     await sleep(700);
   }
+  cachedPdfFile = null;
 }
 
-function fillFields(fields: FormField[], profile: import("@/shared/types").Profile, result: TailorResult) {
+async function loadPdfAsFile(): Promise<File | null> {
+  const res = await sendMessage<StoredPdf>({ kind: "get-resume-pdf" });
+  if (!res.ok || !res.data) return null;
+  const { base64, filename } = res.data;
+  try {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], filename, { type: "application/pdf" });
+  } catch (e) {
+    console.warn("[Job Autopilot] failed to decode stored PDF", e);
+    return null;
+  }
+}
+
+async function fillFields(
+  fields: FormField[],
+  profile: import("@/shared/types").Profile,
+  result: TailorResult,
+): Promise<number> {
+  let filesAttached = 0;
   for (const f of fields) {
     const labelLower = f.label.toLowerCase();
+
+    // ----- file inputs: auto-attach stored PDF ---------------------------
+    if (f.type === "file") {
+      if (!cachedPdfFile) continue;
+      // Skip non-resume-shaped uploaders (cover letter, transcript). Match by
+      // label or accept attribute to make sure we only attach resumes.
+      const accept = (f.element as HTMLInputElement).accept || "";
+      const wantsResume =
+        matches(labelLower, ["resume", "cv", "curriculum vitae"]) ||
+        accept.includes("pdf") ||
+        accept.includes("application/pdf") ||
+        // No label + accepts pdf → very likely the resume slot
+        (!f.label && (accept === "" || accept.includes("*")));
+      if (!wantsResume) continue;
+      if (attachFileToInput(f.element as HTMLInputElement, cachedPdfFile)) {
+        filesAttached++;
+      }
+      continue;
+    }
+
     const valueToSet = pickValueForField(f, labelLower, profile, result);
     if (valueToSet === null) continue;
 
@@ -392,6 +447,7 @@ function fillFields(fields: FormField[], profile: import("@/shared/types").Profi
       setSelectValue(f.element as HTMLSelectElement, valueToSet);
     }
   }
+  return filesAttached;
 }
 
 function pickValueForField(

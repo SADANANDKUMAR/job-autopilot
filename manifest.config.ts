@@ -6,7 +6,7 @@ export default defineManifest({
   short_name: "Job Autopilot",
   description:
     "Tailor your resume to each LinkedIn Easy Apply job with Claude AI, auto-fill the application form, and review-then-submit. TOS-safe — you always click Submit yourself.",
-  version: "0.1.0",
+  version: "0.2.0",
   icons: {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",

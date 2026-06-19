@@ -48,7 +48,7 @@ The extension never opens new tabs, never scrapes other users' data, never submi
 - **Claude API calls** go directly from your browser to `api.anthropic.com` (no Job Autopilot server in between)
 - **No analytics, no telemetry, no third-party tracking**
 
-## What's in v0.1
+## What's in v0.2
 
 - ✅ Onboarding popup (resume + profile + targets + API key)
 - ✅ LinkedIn job detection on `linkedin.com/jobs/*`
@@ -56,14 +56,16 @@ The extension never opens new tabs, never scrapes other users' data, never submi
 - ✅ Easy Apply form auto-fill (text/email/phone/numeric/select/textarea)
 - ✅ Stops at Submit button — TOS-safe
 - ✅ History tab (last 500 applications)
+- ✅ **PDF resume drag-drop** — pdf.js extracts text, lazy-loaded so popup stays fast
+- ✅ **PDF auto-attached** to LinkedIn upload fields via DataTransfer (same path the browser uses for drag-drop)
 
 ## Roadmap
 
-- v0.2: PDF resume upload (pdf.js parsing)
-- v0.3: Naukri.com support
-- v0.4: Indeed Apply support
-- v0.5: Batch mode — queue 50 jobs to review one-by-one
-- v0.6: Daily "10 jobs you'd be a fit for" digest
+- v0.3: Radio / checkbox / artdeco-listbox screening question support
+- v0.4: Naukri.com support
+- v0.5: Indeed Apply support
+- v0.6: Batch mode — queue 50 jobs to review one-by-one
+- v0.7: Daily "10 jobs you'd be a fit for" digest
 
 ## File structure
 

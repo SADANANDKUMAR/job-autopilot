@@ -13,6 +13,11 @@ export type Profile = {
 export type Resume = {
   text: string;         // Plain-text resume (paste or PDF-extracted)
   updatedAt: number;    // epoch ms
+  // Optional original PDF — stored as base64 so the content script can
+  // re-create a File and drop it into LinkedIn file-upload inputs.
+  pdfBase64?: string;
+  pdfFilename?: string;
+  pdfBytes?: number;
 };
 
 export type Preferences = {
@@ -70,7 +75,14 @@ export type Msg =
   | { kind: "save-applied"; job: AppliedJob }
   | { kind: "get-profile" }
   | { kind: "get-settings" }
+  | { kind: "get-resume-pdf" }
   | { kind: "ping" };
+
+export type StoredPdf = {
+  base64: string;
+  filename: string;
+  bytes: number;
+} | null;
 
 export type MsgResponse<T = unknown> =
   | { ok: true; data: T }

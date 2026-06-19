@@ -185,6 +185,25 @@ export function setSelectValue(el: HTMLSelectElement, value: string): boolean {
   return true;
 }
 
+/** Programmatically attach a File to a file-input element. LinkedIn's
+ *  controlled `<input type=file>` rejects direct `.files = ...` assignment
+ *  but accepts a DataTransfer-backed FileList — same path the browser uses
+ *  for drag-drop. We then fire change so React commits the value. */
+export function attachFileToInput(input: HTMLInputElement, file: File): boolean {
+  if (input.type !== "file") return false;
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  } catch (e) {
+    console.warn("[Job Autopilot] file attach failed", e);
+    return false;
+  }
+}
+
 /** Find LinkedIn's "Next" / "Submit application" button in the modal. */
 export function findModalAdvanceButton(modal: HTMLElement): { btn: HTMLButtonElement; isSubmit: boolean } | null {
   const buttons = modal.querySelectorAll<HTMLButtonElement>("button[type='button'], button[type='submit'], button");

@@ -93,6 +93,19 @@ async function handleMessage(msg: Msg): Promise<MsgResponse> {
     case "save-applied":
       await storage.addApplied(msg.job);
       return { ok: true, data: { saved: true } };
+
+    case "get-resume-pdf": {
+      const r = await storage.getResume();
+      if (!r?.pdfBase64) return { ok: true, data: null };
+      return {
+        ok: true,
+        data: {
+          base64: r.pdfBase64,
+          filename: r.pdfFilename || "resume.pdf",
+          bytes: r.pdfBytes || 0,
+        },
+      };
+    }
   }
 }
 
