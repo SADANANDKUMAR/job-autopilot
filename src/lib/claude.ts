@@ -1,7 +1,10 @@
-// Claude API wrapper — called from the background service worker so the API
-// key never reaches the LinkedIn page context. We use the REST API directly
-// (not the SDK) because the SDK pulls in node-fetch + streams which inflate
-// the service-worker bundle for no real benefit here.
+// Claude API wrapper — runs in the background service worker so the API key
+// never reaches a job-board page context. We call the REST API directly (no
+// SDK) to keep the service-worker bundle tiny.
+//
+// v0.3: every call uses TOOL-USE structured output (tool_choice forced) so the
+// model returns a typed object, never prose we have to fence-strip and pray
+// over. This is what makes unattended runs reliable.
 
 import type { JobContext, Profile, Resume, Preferences, TailorResult } from "@/shared/types";
 
@@ -15,27 +18,198 @@ export class ClaudeError extends Error {
   }
 }
 
-const SYSTEM_PROMPT = `You are an expert career coach + resume strategist. Given a user's base resume and a target job description, you tailor the resume to maximize the candidate's chance of getting an interview at THIS specific company for THIS specific role.
+type ToolUseBlock = { type: "tool_use"; name: string; input: unknown };
+type ApiResponse = {
+  content?: Array<{ type: string; name?: string; input?: unknown; text?: string }>;
+  stop_reason?: string;
+  error?: { message?: string };
+};
 
-Your output is a structured JSON object — never prose, never markdown wrappers.
+type CallArgs = {
+  apiKey: string;
+  model: string;
+  system: string;
+  userContent: string;
+  tool: { name: string; description: string; input_schema: Record<string, unknown> };
+  maxTokens?: number;
+};
+
+/** One request → forced tool call → the tool's typed input object. */
+async function callTool<T>(args: CallArgs): Promise<T> {
+  const { apiKey, model, system, userContent, tool, maxTokens = 4096 } = args;
+
+  if (!apiKey || !apiKey.startsWith("sk-ant-")) {
+    throw new ClaudeError("Missing or invalid Anthropic API key. Open the popup → Settings.");
+  }
+
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    system,
+    tools: [tool],
+    tool_choice: { type: "tool", name: tool.name },
+    messages: [{ role: "user", content: userContent }],
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new ClaudeError(`Network error reaching Claude: ${(e as Error).message}`);
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    let msg = text.slice(0, 300);
+    try {
+      msg = (JSON.parse(text) as ApiResponse).error?.message || msg;
+    } catch {
+      /* keep raw */
+    }
+    throw new ClaudeError(`Claude API ${res.status}: ${msg}`, res.status);
+  }
+
+  const json = (await res.json()) as ApiResponse;
+  const block = json.content?.find((c): c is ToolUseBlock => c.type === "tool_use" && c.name === tool.name);
+  if (!block || typeof block.input !== "object" || block.input === null) {
+    throw new ClaudeError("Claude did not return structured output. Try again.");
+  }
+  return block.input as T;
+}
+
+// ===========================================================================
+// 1. Resume → structured Profile
+// ===========================================================================
+
+const PARSE_SYSTEM = `You extract a structured candidate profile from a raw resume. Be faithful: copy facts exactly as written. NEVER invent data. If a field is absent from the resume, omit it (or use an empty string/array). Normalize phone numbers to include the country code when you can infer it from context. For yearsExperience, compute total professional years from the work history (round to the nearest whole number).`;
+
+const PROFILE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    fullName: { type: "string" },
+    firstName: { type: "string" },
+    lastName: { type: "string" },
+    email: { type: "string" },
+    phone: { type: "string" },
+    phoneCountryCode: { type: "string", description: "e.g. +91" },
+    location: { type: "string", description: "City, Country" },
+    city: { type: "string" },
+    country: { type: "string" },
+    linkedinUrl: { type: "string" },
+    portfolioUrl: { type: "string" },
+    githubUrl: { type: "string" },
+    headline: { type: "string" },
+    summary: { type: "string" },
+    yearsExperience: { type: "number" },
+    currentCompany: { type: "string" },
+    currentTitle: { type: "string" },
+    skills: { type: "array", items: { type: "string" } },
+    work: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          company: { type: "string" },
+          title: { type: "string" },
+          startDate: { type: "string" },
+          endDate: { type: "string" },
+          location: { type: "string" },
+          bullets: { type: "array", items: { type: "string" } },
+        },
+        required: ["company", "title", "startDate", "endDate", "bullets"],
+      },
+    },
+    education: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          institution: { type: "string" },
+          degree: { type: "string" },
+          startDate: { type: "string" },
+          endDate: { type: "string" },
+          grade: { type: "string" },
+        },
+        required: ["institution", "degree"],
+      },
+    },
+    certifications: { type: "array", items: { type: "string" } },
+    languages: { type: "array", items: { type: "string" } },
+  },
+  required: ["fullName", "firstName", "lastName", "email", "phone", "location", "skills", "work", "education"],
+};
+
+export async function parseResume(resumeText: string, apiKey: string, model: string): Promise<Partial<Profile>> {
+  if (!resumeText || resumeText.trim().length < 80) {
+    throw new ClaudeError("Resume text is empty or too short to parse.");
+  }
+  const parsed = await callTool<Partial<Profile>>({
+    apiKey,
+    model,
+    system: PARSE_SYSTEM,
+    userContent: `=== RESUME ===\n${resumeText}\n\nExtract the structured profile.`,
+    tool: {
+      name: "save_profile",
+      description: "Save the structured candidate profile extracted from the resume.",
+      input_schema: PROFILE_SCHEMA,
+    },
+    maxTokens: 4096,
+  });
+  // Belt-and-braces: ensure arrays exist so downstream code never NPEs.
+  parsed.skills = parsed.skills ?? [];
+  parsed.work = parsed.work ?? [];
+  parsed.education = parsed.education ?? [];
+  if (!parsed.fullName && (parsed.firstName || parsed.lastName)) {
+    parsed.fullName = [parsed.firstName, parsed.lastName].filter(Boolean).join(" ");
+  }
+  return parsed;
+}
+
+// ===========================================================================
+// 2. Tailor resume + cover letter + screening answers for one JD
+// ===========================================================================
+
+const TAILOR_SYSTEM = `You are an expert career coach + resume strategist. Given a candidate's structured profile and a target job description, you tailor their resume to maximize interview chances for THIS specific role.
 
 Rules:
-1. NEVER invent experience, skills, employers, dates, or degrees the user doesn't have. Reframe is fine; fabrication is not.
-2. Mirror the language of the JD where the user's actual experience matches — same verbs, same nouns. ATS systems keyword-match.
-3. Lead each bullet with quantified impact when possible (numbers, %s, currency, scale).
-4. Cut anything irrelevant to this role even if it was in the original. A tight 1-page resume beats a bloated 2-page one.
-5. matchScore should reflect actual fit, not flattery — 60 means "decent but not perfect", 85 means "strong match", 95+ should be rare and mean "exactly the role they're built for".
-6. screeningAnswers: anticipate 4-6 common LinkedIn Easy Apply screening questions for this kind of role (years of experience in X, eligible to work in Y location, willing to relocate, current notice period, current/expected CTC for India, English proficiency, etc). Use the user's profile data to answer truthfully. If you don't have the data, write "[NEEDS USER INPUT]" — never guess.
-7. Cover letter: 3 paragraphs max, ~120 words. Specific to this company + role, not generic. Open with why THIS company specifically.
+1. NEVER invent experience, skills, employers, dates, or degrees. Reframing is fine; fabrication is not.
+2. Mirror the JD's language where the candidate's real experience matches — same verbs, same nouns. ATS systems keyword-match.
+3. Lead bullets with quantified impact when the source resume has numbers.
+4. Cut anything irrelevant to this role. A tight resume beats a bloated one.
+5. matchScore reflects actual fit, not flattery — 60 = decent, 85 = strong, 95+ should be rare (exactly built for it).
+6. screeningAnswers: anticipate the common questions THIS job's Easy/quick apply will ask (years in X, work authorization, relocation, notice period, current/expected CTC for India roles, English proficiency). Answer truthfully from the profile. If the profile lacks the data, answer "[NEEDS USER INPUT]" — never guess.
+7. Cover letter: 3 short paragraphs, ~120 words, specific to this company + role.`;
 
-Return ONLY valid JSON matching this shape:
-{
-  "tailoredResume": "Full tailored resume as plain text — preserve sectioning (SUMMARY, EXPERIENCE, SKILLS, EDUCATION) with simple line breaks. No markdown.",
-  "matchScore": 0-100 integer,
-  "keyHighlights": ["3-5 bullet talking points to emphasize verbally if asked"],
-  "coverLetter": "Short cover letter",
-  "screeningAnswers": [{"question": "...", "answer": "..."}]
-}`;
+const TAILOR_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    tailoredResume: {
+      type: "string",
+      description: "Full tailored resume as plain text, sectioned (SUMMARY, EXPERIENCE, SKILLS, EDUCATION), no markdown.",
+    },
+    matchScore: { type: "integer", description: "0-100 fit for this JD" },
+    keyHighlights: { type: "array", items: { type: "string" }, description: "3-5 talking points" },
+    coverLetter: { type: "string" },
+    screeningAnswers: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { question: { type: "string" }, answer: { type: "string" } },
+        required: ["question", "answer"],
+      },
+    },
+  },
+  required: ["tailoredResume", "matchScore", "keyHighlights", "coverLetter", "screeningAnswers"],
+};
 
 export type TailorInput = {
   job: JobContext;
@@ -48,97 +222,124 @@ export type TailorInput = {
 
 export async function tailorResume(input: TailorInput): Promise<TailorResult> {
   const { job, profile, resume, prefs, apiKey, model } = input;
-
-  if (!apiKey || !apiKey.startsWith("sk-ant-")) {
-    throw new ClaudeError("Missing or invalid Anthropic API key. Open Job Autopilot popup → Settings to add one.");
-  }
-  if (!resume.text || resume.text.length < 100) {
-    throw new ClaudeError("Resume is empty or too short. Paste your full resume in the popup → Profile tab.");
+  if (!resume.text || resume.text.length < 80) {
+    throw new ClaudeError("Resume is empty or too short. Add it in the popup → Profile.");
   }
 
-  const userMessage = [
+  const userContent = [
     "=== CANDIDATE PROFILE ===",
-    `Name: ${profile.fullName || "[not set]"}`,
-    `Email: ${profile.email || "[not set]"}`,
-    `Phone: ${profile.phone || "[not set]"}`,
-    `Location: ${profile.location || "[not set]"}`,
-    profile.linkedinUrl ? `LinkedIn: ${profile.linkedinUrl}` : "",
-    profile.portfolioUrl ? `Portfolio: ${profile.portfolioUrl}` : "",
-    profile.yearsExperience !== undefined ? `Years experience: ${profile.yearsExperience}` : "",
+    JSON.stringify(compactProfile(profile), null, 2),
     "",
-    "=== BASE RESUME ===",
+    "=== BASE RESUME (verbatim) ===",
     resume.text,
     "",
     "=== JOB PREFERENCES ===",
     `Target titles: ${prefs.targetTitles.join(", ") || "[not set]"}`,
     `Target locations: ${prefs.targetLocations.join(", ") || "[not set]"}`,
     `Remote OK: ${prefs.remoteOk ? "yes" : "no"}`,
-    prefs.minSalaryLpa ? `Min salary: ₹${prefs.minSalaryLpa}L per annum` : "",
+    prefs.minSalaryLpa ? `Min salary: ₹${prefs.minSalaryLpa}L/annum` : "",
     "",
     "=== TARGET JOB ===",
+    `Platform: ${job.platform}`,
     `Company: ${job.company}`,
     `Title: ${job.title}`,
     `Location: ${job.location}`,
-    `URL: ${job.url}`,
     "",
     "Job description:",
     job.description,
-    "",
-    "Return tailored output as JSON per the schema in the system prompt.",
   ].filter(Boolean).join("\n");
 
-  const body = {
+  const result = await callTool<TailorResult>({
+    apiKey,
     model,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userMessage }],
-  };
-
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "anthropic-dangerous-direct-browser-access": "true",
+    system: TAILOR_SYSTEM,
+    userContent,
+    tool: {
+      name: "submit_tailored_application",
+      description: "Return the tailored resume, match score, highlights, cover letter and screening answers.",
+      input_schema: TAILOR_SCHEMA,
     },
-    body: JSON.stringify(body),
+    maxTokens: 4096,
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new ClaudeError(`Claude API ${res.status}: ${text.slice(0, 300)}`, res.status);
-  }
+  result.keyHighlights = Array.isArray(result.keyHighlights) ? result.keyHighlights : [];
+  result.screeningAnswers = Array.isArray(result.screeningAnswers) ? result.screeningAnswers : [];
+  result.coverLetter = result.coverLetter || "";
+  if (typeof result.matchScore !== "number") result.matchScore = 0;
+  return result;
+}
 
-  const json = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-    stop_reason?: string;
+// ===========================================================================
+// 3. Answer ONE live screening question the tailor didn't anticipate
+//    (used mid-form so autopilot doesn't stall on an unexpected field)
+// ===========================================================================
+
+const ANSWER_SYSTEM = `You answer a single job-application screening question on the candidate's behalf, truthfully, using ONLY their profile. If the question needs data the profile doesn't contain, set "answer" to "" and "confident" to false — do not guess personal facts (visa status, exact CTC, etc). For numeric questions (years of experience) return just the number. For yes/no return "Yes" or "No". If options are given, your answer MUST be exactly one of them.`;
+
+const ANSWER_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    answer: { type: "string", description: "The value to type/select. Empty if not confidently answerable." },
+    confident: { type: "boolean" },
+  },
+  required: ["answer", "confident"],
+};
+
+export async function answerQuestion(
+  question: string,
+  options: string[] | undefined,
+  profile: Profile,
+  job: JobContext,
+  apiKey: string,
+  model: string,
+): Promise<{ answer: string; confident: boolean }> {
+  const userContent = [
+    "=== CANDIDATE PROFILE ===",
+    JSON.stringify(compactProfile(profile), null, 2),
+    "",
+    `=== JOB === ${job.title} @ ${job.company} (${job.location})`,
+    "",
+    `QUESTION: ${question}`,
+    options && options.length ? `OPTIONS (pick exactly one): ${options.join(" | ")}` : "",
+    "",
+    "Answer from the profile only.",
+  ].filter(Boolean).join("\n");
+
+  return callTool<{ answer: string; confident: boolean }>({
+    apiKey,
+    model,
+    system: ANSWER_SYSTEM,
+    userContent,
+    tool: {
+      name: "answer",
+      description: "Provide the answer to the screening question.",
+      input_schema: ANSWER_SCHEMA,
+    },
+    maxTokens: 512,
+  });
+}
+
+// ---------------------------------------------------------------------------
+
+/** Trim the profile to the fields Claude needs — keeps prompts cheap. */
+function compactProfile(p: Profile): Record<string, unknown> {
+  return {
+    name: p.fullName,
+    headline: p.headline,
+    location: p.location,
+    yearsExperience: p.yearsExperience,
+    currentTitle: p.currentTitle,
+    currentCompany: p.currentCompany,
+    currentCtcLpa: p.currentCtcLpa,
+    expectedCtcLpa: p.expectedCtcLpa,
+    noticePeriodDays: p.noticePeriodDays,
+    willingToRelocate: p.willingToRelocate,
+    requiresVisaSponsorship: p.requiresVisaSponsorship,
+    authorizedCountries: p.authorizedCountries,
+    skills: p.skills,
+    work: p.work,
+    education: p.education,
+    certifications: p.certifications,
+    languages: p.languages,
   };
-
-  const textBlock = json.content?.find((c) => c.type === "text")?.text || "";
-  if (!textBlock) {
-    throw new ClaudeError("Claude returned no text content. Try again.");
-  }
-
-  // Claude sometimes wraps JSON in ```json ... ``` despite system-prompt
-  // instructions. Strip those fences if present, then parse.
-  const cleaned = textBlock
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/, "")
-    .trim();
-
-  try {
-    const parsed = JSON.parse(cleaned) as TailorResult;
-    // Minimal shape validation — we don't need a heavy schema lib in a service worker
-    if (typeof parsed.tailoredResume !== "string" || typeof parsed.matchScore !== "number") {
-      throw new Error("missing required fields");
-    }
-    parsed.keyHighlights = Array.isArray(parsed.keyHighlights) ? parsed.keyHighlights : [];
-    parsed.screeningAnswers = Array.isArray(parsed.screeningAnswers) ? parsed.screeningAnswers : [];
-    parsed.coverLetter = parsed.coverLetter || "";
-    return parsed;
-  } catch (e) {
-    throw new ClaudeError(`Claude returned malformed JSON: ${(e as Error).message}. Raw: ${cleaned.slice(0, 200)}`);
-  }
 }

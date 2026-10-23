@@ -1,7 +1,7 @@
 {
   "name": "job-autopilot",
-  "version": "0.2.0",
-  "description": "Chrome extension — AI-tailored resumes + one-click form-fill for LinkedIn Easy Apply jobs.",
+  "version": "0.3.0",
+  "description": "Chrome extension — AI-tailored resumes + autonomous search-and-apply across job boards.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.1",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

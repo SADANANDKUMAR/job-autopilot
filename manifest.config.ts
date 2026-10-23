@@ -2,11 +2,11 @@ import { defineManifest } from "@crxjs/vite-plugin";
 
 export default defineManifest({
   manifest_version: 3,
-  name: "Job Autopilot — AI-tailored LinkedIn Easy Apply",
+  name: "Job Autopilot — AI auto-apply",
   short_name: "Job Autopilot",
   description:
-    "Tailor your resume to each LinkedIn Easy Apply job with Claude AI, auto-fill the application form, and review-then-submit. TOS-safe — you always click Submit yourself.",
-  version: "0.2.0",
+    "Drop your resume once. Claude tailors it per job and the autopilot searches, fills and (optionally) submits applications on LinkedIn.",
+  version: "0.3.0",
   icons: {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
@@ -23,19 +23,33 @@ export default defineManifest({
   content_scripts: [
     {
       matches: ["https://www.linkedin.com/jobs/*"],
-      js: ["src/content/index.ts"],
+      js: ["src/content/linkedin.ts"],
       run_at: "document_idle",
     },
+    {
+      matches: ["https://www.naukri.com/*"],
+      js: ["src/content/naukri.ts"],
+      run_at: "document_idle",
+    },
+    {
+      // all_frames so the helper reaches the cross-origin Indeed Apply iframe.
+      matches: ["https://*.indeed.com/*"],
+      js: ["src/content/indeed.ts"],
+      run_at: "document_idle",
+      all_frames: true,
+    },
   ],
-  permissions: ["storage", "activeTab", "scripting"],
+  permissions: ["storage", "activeTab", "scripting", "tabs"],
   host_permissions: [
     "https://www.linkedin.com/*",
+    "https://*.naukri.com/*",
+    "https://*.indeed.com/*",
     "https://api.anthropic.com/*",
   ],
   web_accessible_resources: [
     {
       resources: ["icons/*", "assets/*"],
-      matches: ["https://www.linkedin.com/*"],
+      matches: ["https://www.linkedin.com/*", "https://*.naukri.com/*", "https://*.indeed.com/*"],
     },
   ],
 });

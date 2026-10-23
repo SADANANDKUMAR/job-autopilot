@@ -13,14 +13,24 @@ function timeAgo(epochMs: number): string {
 }
 
 const STATUS_LABEL: Record<AppliedJob["status"], string> = {
+  queued: "Queued",
+  tailoring: "Tailoring",
+  filling: "Filling",
   filled: "Filled (not submitted)",
   submitted: "Submitted",
   skipped: "Skipped",
+  paused: "Paused",
+  error: "Error",
 };
 const STATUS_TONE: Record<AppliedJob["status"], "ok" | "warn" | "bad"> = {
+  queued: "warn",
+  tailoring: "warn",
+  filling: "warn",
   filled: "warn",
   submitted: "ok",
   skipped: "bad",
+  paused: "warn",
+  error: "bad",
 };
 
 export default function HistoryTab({
@@ -74,11 +84,12 @@ export default function HistoryTab({
             {j.location && ` · ${j.location}`}
             {" · "}{timeAgo(j.appliedAt)}
           </div>
-          <div>
-            <span className={`pill ${STATUS_TONE[j.status]}`} style={{ marginTop: 2 }}>
-              {STATUS_LABEL[j.status]}
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+            <span className={`pill ${STATUS_TONE[j.status]}`}>{STATUS_LABEL[j.status]}</span>
+            {j.platform && <span className="pill" style={{ textTransform: "capitalize" }}>{j.platform}</span>}
+            {typeof j.matchScore === "number" && <span style={{ fontSize: 11, color: "var(--muted)" }}>match {j.matchScore}</span>}
           </div>
+          {j.note && <div className="job-meta" style={{ marginTop: 4, fontStyle: "italic" }}>{j.note}</div>}
         </div>
       ))}
     </div>
