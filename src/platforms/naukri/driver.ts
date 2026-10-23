@@ -156,6 +156,18 @@ export class NaukriDriver implements PlatformDriver {
     return !!apply && /applied/i.test(apply.textContent || "");
   }
 
+  isLoggedOut(): boolean {
+    // Logged-in markers: the member global-nav drawer / profile menu.
+    if (document.querySelector("[class*='nI-gNb-drawer'], [class*='nI-gNb-menuItems'], [class*='view-profile-wrapper'], .mn-hdr")) {
+      return false;
+    }
+    // Guest markers: Login / Register affordances.
+    if (document.querySelector("#login_Layer, a[title='Jobseeker Login'], [class*='login-layer'], a[href*='/nlogin/login']")) {
+      return true;
+    }
+    return /login to apply|please login|register for free/i.test(document.body.innerText || "");
+  }
+
   // ---- the apply flow ------------------------------------------------------
 
   async startApply(): Promise<ApplyHandle | null> {

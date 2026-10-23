@@ -80,6 +80,12 @@ export interface PlatformDriver {
   canAutoApply(): boolean;
   /** Does the site already show this job as applied? */
   alreadyApplied(): boolean;
+  /**
+   * True when the site is showing a logged-out / sign-in wall that blocks
+   * applying. The engine pauses with a "sign in, then Resume" message instead
+   * of silently looping. Sites that allow guest apply should return false.
+   */
+  isLoggedOut(): boolean;
 
   // ---- the apply flow ------------------------------------------------------
   /** Click the site's apply button and wait for the form/modal. */

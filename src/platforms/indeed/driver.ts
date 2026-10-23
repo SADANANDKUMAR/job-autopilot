@@ -163,6 +163,13 @@ export class IndeedDriver implements PlatformDriver {
     return !!header && /applied/i.test(header.textContent || "");
   }
 
+  isLoggedOut(): boolean {
+    // Indeed Apply works for guests (it collects your email in the flow), so a
+    // signed-out session is NOT a blocker here — never false-pause the run.
+    // A hard bot/login wall is caught by detectCaptcha() instead.
+    return false;
+  }
+
   // ---- the apply flow (delegated to the iframe helper) ---------------------
 
   async startApply(): Promise<ApplyHandle | null> {

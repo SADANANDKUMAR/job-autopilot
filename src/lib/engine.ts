@@ -26,6 +26,7 @@ import type {
   AppliedJob,
   AutopilotState,
   ActiveApply,
+  Platform,
 } from "@/shared/types";
 
 const RUN_KEY = "autopilotRun";
@@ -158,6 +159,13 @@ async function drive(driver: PlatformDriver): Promise<void> {
         return;
       }
 
+      // 1b) Signed out? Pause with a clear message instead of looping forever.
+      await sleep(800); // let the page settle before judging auth state
+      if (driver.isLoggedOut()) {
+        await pause(`You're not signed in to ${platformName(driver.platform)}. Sign in in this tab, then press Resume.`);
+        return;
+      }
+
       // 2) Harvest cards into the queue if empty.
       if (run.queue.length === 0) {
         await sleep(1200); // let results render
@@ -240,6 +248,10 @@ async function applyCurrent(
   await sleep(600);
   if (driver.detectCaptcha()) {
     await pause("A CAPTCHA appeared. Solve it, then press Resume.");
+    return "paused";
+  }
+  if (driver.isLoggedOut()) {
+    await pause(`Signed out of ${platformName(card.platform)} mid-run. Sign in, then press Resume.`);
     return "paused";
   }
   if (driver.alreadyApplied() || (await hasApplied(cardId(card)))) {
@@ -437,6 +449,10 @@ function toJobContext(p: JobPosting): JobContext {
 
 function cardId(c: JobCard): string {
   return `${c.platform}:${c.jobId}`;
+}
+
+function platformName(p: Platform): string {
+  return p === "linkedin" ? "LinkedIn" : p === "naukri" ? "Naukri" : "Indeed";
 }
 
 /** Randomized between-application pause. Returns false if the run stopped. */

@@ -205,6 +205,19 @@ export class LinkedInDriver implements PlatformDriver {
     return !!topcard && /\bapplied\b/i.test(topcard.textContent || "") && !this.findEasyApplyButton();
   }
 
+  isLoggedOut(): boolean {
+    // Logged-in markers win (member nav / authenticated job list).
+    if (document.querySelector(".global-nav__me, .global-nav__me-photo, a[href*='/feed/'], [data-control-name='nav.settings']")) {
+      return false;
+    }
+    if (document.querySelector("li[data-occludable-job-id]")) return false;
+    // Guest / sign-in wall markers.
+    if (document.querySelector("a[href*='/login'], a.nav__button-secondary, .authwall, .join-form, [data-tracking-control-name*='guest']")) {
+      return true;
+    }
+    return /\bsign in to view|join linkedin|new to linkedin\?/i.test(document.body.innerText || "");
+  }
+
   private findEasyApplyButton(): HTMLButtonElement | null {
     const candidates = document.querySelectorAll<HTMLButtonElement>(
       "button.jobs-apply-button, .jobs-apply-button button, button[aria-label*='Easy Apply' i]",
